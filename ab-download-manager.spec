@@ -1,4 +1,3 @@
-```spec
 Name:           ab-download-manager
 Version:        1.10.1
 Release:        %autorelease
