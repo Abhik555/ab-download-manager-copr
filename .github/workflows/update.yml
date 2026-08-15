@@ -1,0 +1,183 @@
+name: Update AB Download Manager
+
+on:
+  schedule:
+    # Check once every day at 03:30 UTC.
+    - cron: "30 3 * * *"
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-ab-download-manager
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Check for upstream release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout packaging repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Get latest stable upstream release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          release_json="$(gh api repos/amir1376/ab-download-manager/releases/latest)"
+
+          tag="$(jq -r '.tag_name' <<< "$release_json")"
+          prerelease="$(jq -r '.prerelease' <<< "$release_json")"
+          draft="$(jq -r '.draft' <<< "$release_json")"
+
+          if [[ -z "$tag" || "$tag" == "null" ]]; then
+            echo "Could not determine latest upstream release."
+            exit 1
+          fi
+
+          if [[ "$prerelease" == "true" || "$draft" == "true" ]]; then
+            echo "Latest release is not a stable release: $tag"
+            exit 1
+          fi
+
+          if [[ "$tag" != v* ]]; then
+            echo "Unexpected upstream tag format: $tag"
+            exit 1
+          fi
+
+          version="${tag#v}"
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          echo "Latest stable release: $tag"
+          echo "Version: $version"
+
+      - name: Check whether package needs updating
+        id: check
+        env:
+          UPSTREAM_VERSION: ${{ steps.upstream.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          current_version="$(sed -nE \
+            's/^Version:[[:space:]]*([^[:space:]]+).*$/\1/p' \
+            ab-download-manager.spec | head -n1)"
+
+          if [[ -z "$current_version" ]]; then
+            echo "Could not determine current RPM version."
+            exit 1
+          fi
+
+          echo "Current package version: $current_version"
+          echo "Latest upstream version: $UPSTREAM_VERSION"
+
+          if [[ "$current_version" == "$UPSTREAM_VERSION" ]]; then
+            echo "Package is already up to date."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Package needs an update."
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify upstream release assets
+        if: steps.check.outputs.needed == 'true'
+        env:
+          VERSION: ${{ steps.upstream.outputs.version }}
+          TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          x64_url="https://github.com/amir1376/ab-download-manager/releases/download/${TAG}/ABDownloadManager_${VERSION}_linux_x64.tar.gz"
+          arm64_url="https://github.com/amir1376/ab-download-manager/releases/download/${TAG}/ABDownloadManager_${VERSION}_linux_arm64.tar.gz"
+
+          echo "Checking x86_64 asset..."
+          curl --fail --silent --show-error --location \
+            --head "$x64_url"
+
+          echo "Checking aarch64 asset..."
+          curl --fail --silent --show-error --location \
+            --head "$arm64_url"
+
+          echo "Both Linux release assets are available."
+
+      - name: Update spec version
+        if: steps.check.outputs.needed == 'true'
+        env:
+          VERSION: ${{ steps.upstream.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          sed -i -E \
+            "s/^Version:[[:space:]]*.*/Version:        ${VERSION}/" \
+            ab-download-manager.spec
+
+          echo "Updated spec:"
+          grep '^Version:' ab-download-manager.spec
+
+      - name: Update RPM changelog
+        if: steps.check.outputs.needed == 'true'
+        env:
+          VERSION: ${{ steps.upstream.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          tmp="$(mktemp)"
+
+          {
+            echo "%changelog"
+            echo "* $(date -u '+%a %b %d %Y') GitHub Actions <actions@github.com> - ${VERSION}-1"
+            echo "- Update to upstream version ${VERSION}"
+            echo
+            sed -n '/^%changelog$/,$p' ab-download-manager.spec | tail -n +2
+          } > "$tmp"
+
+          awk '
+            BEGIN { in_changelog=0 }
+            /^%changelog$/ {
+              in_changelog=1
+              next
+            }
+            !in_changelog {
+              print
+            }
+          ' ab-download-manager.spec > "${tmp}.spec"
+
+          cat "${tmp}" >> "${tmp}.spec"
+          mv "${tmp}.spec" ab-download-manager.spec
+          rm -f "$tmp"
+
+      - name: Show changes
+        if: steps.check.outputs.needed == 'true'
+        run: |
+          git diff -- ab-download-manager.spec
+
+      - name: Commit and push update
+        if: steps.check.outputs.needed == 'true'
+        env:
+          VERSION: ${{ steps.upstream.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add ab-download-manager.spec
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit \
+            -m "Update AB Download Manager to ${VERSION}"
+
+          git push

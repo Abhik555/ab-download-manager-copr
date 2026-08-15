@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=AB Download Manager
+GenericName=Download Manager
+Comment=Fast and modern download manager
+Exec=ab-download-manager
+Icon=ab-download-manager
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;Utility;
+StartupNotify=true
+StartupWMClass=com-abdownloadmanager-desktop-AppKt
+TryExec=ab-download-manager
