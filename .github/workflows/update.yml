@@ -1,205 +1,123 @@
 name: Update AB Download Manager
 
 on:
-  schedule:
-    # Run every day at 03:30 UTC.
-    - cron: "30 3 * * *"
-
   workflow_dispatch:
+
+  schedule:
+    # Every day at 03:00 UTC
+    - cron: "0 3 * * *"
 
 permissions:
   contents: write
 
 concurrency:
-  group: update-ab-download-manager
+  group: ab-download-manager-update
   cancel-in-progress: false
 
 jobs:
   update:
-    name: Check upstream release
+    name: Check and update AB Download Manager
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout packaging repository
+      - name: Checkout repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Get latest stable release
-        id: release
+      - name: Get latest upstream release
+        id: upstream
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          release_json="$(
-            gh api \
-              repos/amir1376/ab-download-manager/releases/latest
-          )"
+          TAG=$(gh api \
+            repos/amir1376/ab-download-manager/releases/latest \
+            --jq '.tag_name')
 
-          tag="$(
-            jq -r '.tag_name' <<< "$release_json"
-          )"
-
-          prerelease="$(
-            jq -r '.prerelease' <<< "$release_json"
-          )"
-
-          draft="$(
-            jq -r '.draft' <<< "$release_json"
-          )"
-
-          if [[ -z "$tag" || "$tag" == "null" ]]; then
-            echo "ERROR: Could not determine upstream release."
+          if [[ -z "$TAG" || "$TAG" == "null" ]]; then
+            echo "Could not determine latest release."
             exit 1
           fi
 
-          if [[ "$prerelease" == "true" ]]; then
-            echo "ERROR: Latest release is a prerelease: $tag"
+          if [[ "$TAG" != v* ]]; then
+            echo "Unexpected release tag: $TAG"
             exit 1
           fi
 
-          if [[ "$draft" == "true" ]]; then
-            echo "ERROR: Latest release is a draft: $tag"
-            exit 1
-          fi
+          VERSION="${TAG#v}"
 
-          if [[ "$tag" != v* ]]; then
-            echo "ERROR: Unexpected release tag: $tag"
-            exit 1
-          fi
+          echo "Latest upstream tag: $TAG"
+          echo "Latest upstream version: $VERSION"
 
-          version="${tag#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-          echo "Upstream release: $tag"
-          echo "Upstream version: $version"
-
-      - name: Read current package version
+      - name: Read current version
         id: current
         run: |
           set -euo pipefail
 
-          version="$(
-            sed -nE \
-              's/^Version:[[:space:]]*([^[:space:]]+).*$/\1/p' \
-              ab-download-manager.spec \
-              | head -n1
-          )"
+          CURRENT_VERSION=$(sed -nE \
+            's/^Version:[[:space:]]*([^[:space:]]+).*$/\1/p' \
+            ab-download-manager.spec \
+            | head -n1)
 
-          if [[ -z "$version" ]]; then
-            echo "ERROR: Could not determine current package version."
+          if [[ -z "$CURRENT_VERSION" ]]; then
+            echo "Could not determine current package version."
             exit 1
           fi
 
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Current version: $CURRENT_VERSION"
 
-          echo "Current package version: $version"
+          echo "version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Check whether update is required
+      - name: Check for update
         id: check
         env:
           CURRENT_VERSION: ${{ steps.current.outputs.version }}
-          UPSTREAM_VERSION: ${{ steps.release.outputs.version }}
+          UPSTREAM_VERSION: ${{ steps.upstream.outputs.version }}
         run: |
           set -euo pipefail
 
           if [[ "$CURRENT_VERSION" == "$UPSTREAM_VERSION" ]]; then
+            echo "Already up to date: $CURRENT_VERSION"
             echo "needed=false" >> "$GITHUB_OUTPUT"
-            echo "Package is already up to date."
           else
+            echo "Update available:"
+            echo "  Current:  $CURRENT_VERSION"
+            echo "  New:      $UPSTREAM_VERSION"
+
             echo "needed=true" >> "$GITHUB_OUTPUT"
-            echo "Package update required."
           fi
 
-      - name: Download x86_64 release archive
+      - name: Verify x86_64 release exists
         if: steps.check.outputs.needed == 'true'
         env:
-          VERSION: ${{ steps.release.outputs.version }}
-          TAG: ${{ steps.release.outputs.tag }}
+          TAG: ${{ steps.upstream.outputs.tag }}
+          VERSION: ${{ steps.upstream.outputs.version }}
         run: |
           set -euo pipefail
 
-          url="https://github.com/amir1376/ab-download-manager/releases/download/${TAG}/ABDownloadManager_${VERSION}_linux_x64.tar.gz"
+          URL="https://github.com/amir1376/ab-download-manager/releases/download/${TAG}/ABDownloadManager_${VERSION}_linux_x64.tar.gz"
+
+          echo "Checking:"
+          echo "$URL"
 
           curl \
             --fail \
             --location \
+            --head \
             --retry 5 \
             --retry-delay 5 \
             --retry-all-errors \
-            --show-error \
-            --silent \
-            --output "ABDownloadManager_${VERSION}_linux_x64.tar.gz" \
-            "$url"
-
-      - name: Download aarch64 release archive
-        if: steps.check.outputs.needed == 'true'
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-          TAG: ${{ steps.release.outputs.tag }}
-        run: |
-          set -euo pipefail
-
-          url="https://github.com/amir1376/ab-download-manager/releases/download/${TAG}/ABDownloadManager_${VERSION}_linux_arm64.tar.gz"
-
-          curl \
-            --fail \
-            --location \
-            --retry 5 \
-            --retry-delay 5 \
-            --retry-all-errors \
-            --show-error \
-            --silent \
-            --output "ABDownloadManager_${VERSION}_linux_arm64.tar.gz" \
-            "$url"
-
-      - name: Validate downloaded archives
-        if: steps.check.outputs.needed == 'true'
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          x64="ABDownloadManager_${VERSION}_linux_x64.tar.gz"
-          arm64="ABDownloadManager_${VERSION}_linux_arm64.tar.gz"
-
-          test -s "$x64"
-          test -s "$arm64"
-
-          echo "x86_64 archive:"
-          tar -tzf "$x64" | head -20
-
-          echo
-          echo "aarch64 archive:"
-          tar -tzf "$arm64" | head -20
-
-      - name: Calculate SHA512 checksums
-        if: steps.check.outputs.needed == 'true'
-        id: hashes
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          x64="ABDownloadManager_${VERSION}_linux_x64.tar.gz"
-          arm64="ABDownloadManager_${VERSION}_linux_arm64.tar.gz"
-
-          x64_hash="$(sha512sum "$x64" | awk '{print $1}')"
-          arm64_hash="$(sha512sum "$arm64" | awk '{print $1}')"
-
-          echo "x64_hash=$x64_hash" >> "$GITHUB_OUTPUT"
-          echo "arm64_hash=$arm64_hash" >> "$GITHUB_OUTPUT"
-
-          echo "x86_64 SHA512: $x64_hash"
-          echo "aarch64 SHA512: $arm64_hash"
+            "$URL"
 
       - name: Update spec version
         if: steps.check.outputs.needed == 'true'
         env:
-          VERSION: ${{ steps.release.outputs.version }}
+          VERSION: ${{ steps.upstream.outputs.version }}
         run: |
           set -euo pipefail
 
@@ -207,25 +125,10 @@ jobs:
             "s/^Version:[[:space:]]*.*/Version:        ${VERSION}/" \
             ab-download-manager.spec
 
+          echo "Updated spec:"
           grep '^Version:' ab-download-manager.spec
 
-      - name: Update sources file
-        if: steps.check.outputs.needed == 'true'
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-          X64_HASH: ${{ steps.hashes.outputs.x64_hash }}
-          ARM64_HASH: ${{ steps.hashes.outputs.arm64_hash }}
-        run: |
-          set -euo pipefail
-
-          cat > sources <<EOF
-          SHA512 (ABDownloadManager_${VERSION}_linux_x64.tar.gz) = ${X64_HASH}
-          SHA512 (ABDownloadManager_${VERSION}_linux_arm64.tar.gz) = ${ARM64_HASH}
-          EOF
-
-          cat sources
-
-      - name: Validate RPM spec
+      - name: Validate spec
         if: steps.check.outputs.needed == 'true'
         run: |
           set -euo pipefail
@@ -237,40 +140,25 @@ jobs:
 
           echo "RPM spec syntax is valid."
 
-      - name: Remove downloaded archives
-        if: steps.check.outputs.needed == 'true'
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-        run: |
-          rm -f \
-            "ABDownloadManager_${VERSION}_linux_x64.tar.gz" \
-            "ABDownloadManager_${VERSION}_linux_arm64.tar.gz"
-
       - name: Show changes
         if: steps.check.outputs.needed == 'true'
         run: |
-          git diff -- \
-            ab-download-manager.spec \
-            sources
+          git diff -- ab-download-manager.spec
 
-      - name: Commit update
+      - name: Commit and push
         if: steps.check.outputs.needed == 'true'
         env:
-          VERSION: ${{ steps.release.outputs.version }}
+          VERSION: ${{ steps.upstream.outputs.version }}
         run: |
           set -euo pipefail
 
-          git config \
-            user.name \
+          git config user.name \
             "github-actions[bot]"
 
-          git config \
-            user.email \
+          git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add \
-            ab-download-manager.spec \
-            sources
+          git add ab-download-manager.spec
 
           if git diff --cached --quiet; then
             echo "No changes to commit."

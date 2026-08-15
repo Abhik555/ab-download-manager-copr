@@ -1,109 +1,94 @@
 Name:           ab-download-manager
 Version:        1.10.1
-Release:        %autorelease
+Release:        1%{?dist}
 Summary:        Fast and modern download manager
 
 License:        Apache-2.0
 URL:            https://github.com/amir1376/ab-download-manager
 
-ExclusiveArch:  x86_64 aarch64
-
-Source0:        ABDownloadManager_%{version}_linux_x64.tar.gz
-Source1:        ABDownloadManager_%{version}_linux_arm64.tar.gz
-Source2:        %{name}.desktop
-Source3:        LICENSE
+ExclusiveArch:  x86_64
 
 BuildRequires:  desktop-file-utils
+BuildRequires:  curl
+BuildRequires:  tar
 
 %description
 AB Download Manager is a fast and modern download manager for Linux.
-It provides download acceleration, download queues, scheduling, browser
-integration, multiple themes, and a modern graphical interface.
 
 %prep
-rm -rf %{_builddir}/ab-download-manager
+rm -rf ABDownloadManager
 
-mkdir -p %{_builddir}/ab-download-manager
+mkdir -p ABDownloadManager
 
-%ifarch x86_64
-tar -xzf %{SOURCE0} \
-    -C %{_builddir}/ab-download-manager \
+curl -L --fail --retry 5 \
+    "https://github.com/amir1376/ab-download-manager/releases/download/v%{version}/ABDownloadManager_%{version}_linux_x64.tar.gz" \
+    -o ABDownloadManager.tar.gz
+
+tar -xzf ABDownloadManager.tar.gz \
+    -C ABDownloadManager \
     --strip-components=1
-%endif
 
-%ifarch aarch64
-tar -xzf %{SOURCE1} \
-    -C %{_builddir}/ab-download-manager \
-    --strip-components=1
-%endif
+rm -f ABDownloadManager.tar.gz
 
 %build
-# AB Download Manager is distributed upstream as a prebuilt Linux
-# application. No compilation is required.
+# Upstream provides a prebuilt binary.
+# Nothing needs to be compiled.
 
 %install
 rm -rf %{buildroot}
 
-install -d \
-    %{buildroot}%{_libdir}/%{name}
+# Application
+install -d %{buildroot}%{_libdir}/%{name}
 
-cp -a \
-    %{_builddir}/ab-download-manager/. \
+cp -a ABDownloadManager/. \
     %{buildroot}%{_libdir}/%{name}/
 
-# Main executable
-chmod 0755 \
-    %{buildroot}%{_libdir}/%{name}/bin/ABDownloadManager
-
-# Command available in PATH
-install -d \
-    %{buildroot}%{_bindir}
+# Executable
+install -d %{buildroot}%{_bindir}
 
 ln -s \
     %{_libdir}/%{name}/bin/ABDownloadManager \
     %{buildroot}%{_bindir}/ab-download-manager
 
 # Desktop entry
-install -d \
-    %{buildroot}%{_datadir}/applications
+install -d %{buildroot}%{_datadir}/applications
 
-install -p -m 0644 \
-    %{SOURCE2} \
-    %{buildroot}%{_datadir}/applications/ab-download-manager.desktop
+cat > %{buildroot}%{_datadir}/applications/ab-download-manager.desktop <<EOF
+[Desktop Entry]
+Name=AB Download Manager
+Comment=Fast and modern download manager
+Exec=ab-download-manager
+Icon=ab-download-manager
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;
+StartupNotify=true
+EOF
 
 # Icon
 install -d \
     %{buildroot}%{_datadir}/icons/hicolor/256x256/apps
 
-install -p -m 0644 \
+install -m 0644 \
     %{buildroot}%{_libdir}/%{name}/lib/ABDownloadManager.png \
     %{buildroot}%{_datadir}/icons/hicolor/256x256/apps/ab-download-manager.png
 
-# License
-install -d \
-    %{buildroot}%{_licensedir}/%{name}
-
-install -p -m 0644 \
-    %{SOURCE3} \
-    %{buildroot}%{_licensedir}/%{name}/LICENSE
-
 %check
-desktop-file-validate \
-    %{buildroot}%{_datadir}/applications/ab-download-manager.desktop
-
 test -x \
     %{buildroot}%{_libdir}/%{name}/bin/ABDownloadManager
 
 test -f \
-    %{buildroot}%{_libdir}/%{name}/lib/ABDownloadManager.png
+    %{buildroot}%{_datadir}/icons/hicolor/256x256/apps/ab-download-manager.png
+
+desktop-file-validate \
+    %{buildroot}%{_datadir}/applications/ab-download-manager.desktop
 
 %files
-%license %{_licensedir}/%{name}/LICENSE
-
 %{_bindir}/ab-download-manager
 %{_libdir}/%{name}/
 %{_datadir}/applications/ab-download-manager.desktop
 %{_datadir}/icons/hicolor/256x256/apps/ab-download-manager.png
 
 %changelog
-%autochangelog
+* Sat Aug 15 2026 Abhik Ghosh <abhik@example.com> - 1.10.1-1
+- Initial package
